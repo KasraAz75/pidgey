@@ -1,5 +1,6 @@
 import random
 import functools
+import pandas as pd
 from IPython.display import display, clear_output
 from ipywidgets import Button, Dropdown, HTML, HBox, IntSlider, FloatSlider, Textarea, Output
 
@@ -7,6 +8,8 @@ def annotate(examples,
              options=None,
              shuffle=False,
              include_skip=True,
+             show_columns=None,
+             annotation_column_name='annotation',
              display_fn=display):
     """
     Build an interactive widget for annotating a list of input examples.
@@ -26,17 +29,20 @@ def annotate(examples,
     -------
     annotations : list of tuples, list of annotated examples (example, label)
     """
-    examples = list(examples)
-    if shuffle:
-        random.shuffle(examples)
+    if not isinstance(examples, pd.DataFrame):
+        examples = pd.DataFrame({'examples': examples})
+        show_columns = ['examples']
 
-    annotations = []
+    if shuffle:
+        examples = examples.sample(frac=1.0).reset_index(drop=True)
+
+    examples[annotation_column_name] = None
     current_index = -1
 
     def set_label_text():
         nonlocal count_label
         count_label.value = '{} examples annotated, {} examples left'.format(
-            len(annotations), len(examples) - current_index
+            len(examples) - examples[annotation_column_name].isnull().sum(), len(examples) - current_index
         )
 
     def show_next():
@@ -50,10 +56,10 @@ def annotate(examples,
             return
         with out:
             clear_output(wait=True)
-            display_fn(examples[current_index])
+            display_fn(examples.loc[[current_index]][show_columns])
 
     def add_annotation(annotation):
-        annotations.append((examples[current_index], annotation))
+        examples.at[current_index, annotation_column_name] = annotation
         show_next()
 
     def skip(btn):
@@ -75,7 +81,7 @@ def annotate(examples,
     buttons = []
     
     if task_type == 'classification':
-        use_dropdown = len(options) > 5
+        use_dropdown = len(options) > 10
 
         if use_dropdown:
             dd = Dropdown(options=options)
@@ -123,7 +129,7 @@ def annotate(examples,
         buttons.append(btn)
 
     if include_skip:
-        btn = Button(description='skip')
+        btn = Button(description='skip', button_style='info')
         btn.on_click(skip)
         buttons.append(btn)
 
@@ -135,4 +141,4 @@ def annotate(examples,
 
     show_next()
 
-    return annotations
+    return examples
