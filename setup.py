@@ -8,14 +8,15 @@ from shutil import rmtree
 
 from setuptools import find_packages, setup, Command
 
-NAME = 'pigeon-jupyter'
+NAME = 'pidgey'
 DESCRIPTION = 'Quickly annotate data on Jupyter notebooks.'
-URL = 'https://github.com/agermanidis/pigeon'
-EMAIL = 'agermanidis@gmail.com'
-AUTHOR = 'Anastasis Germanidis'
+URL = 'https://github.com/wbwvos/pidgey'
+EMAIL = 'wbwvos@gmail.com'
+AUTHOR = 'Wolf Vos'
 
 REQUIRED = [
-    'ipywidgets'
+    'ipywidgets',
+    'pandas'
 ]
 
 here = os.path.abspath(os.path.dirname(__file__))
@@ -24,7 +25,7 @@ with io.open(os.path.join(here, 'README.rst'), encoding='utf-8') as f:
     long_description = '\n' + f.read()
 
 about = {}
-with open(os.path.join(here, 'pigeon', '__version__.py')) as f:
+with open(os.path.join(here, 'pidgey', '__version__.py')) as f:
     exec(f.read(), about)
 
 
@@ -68,7 +69,7 @@ setup(
     author=AUTHOR,
     author_email=EMAIL,
     url=URL,
-    packages=['pigeon'],
+    packages=['pidgey'],
     install_requires=REQUIRED,
     include_package_data=True,
     license='Apache 2.0',
