@@ -3,143 +3,176 @@ import functools
 import pandas as pd
 from IPython.display import display, clear_output
 from ipywidgets import Button, Dropdown, HTML, HBox, IntSlider, FloatSlider, Textarea, Output
+from sklearn.model_selection import train_test_split
 
-def annotate(examples,
-             options=None,
-             shuffle=False,
-             include_skip=True,
-             show_columns=None,
-             annotation_column_name='annotation',
-             max_options_dropdown=10,
-             display_fn=display):
-    """
-    Build an interactive widget for annotating a list of input examples.
 
-    Parameters
-    ----------
-    examples: list(any), list of items to annotate
-    options: list(any) or tuple(start, end, [step]) or None
-             if list: list of labels for binary classification task (Dropdown or Buttons)
-             if tuple: range for regression task (IntSlider or FloatSlider)
-             if None: arbitrary text input (TextArea)
-    shuffle: bool, shuffle the examples before annotating
-    include_skip: bool, include option to skip example while annotating
-    display_fn: func, function for displaying an example to the user
 
-    Returns
-    -------
-    annotations : list of tuples, list of annotated examples (example, label)
-    """
-    if not isinstance(examples, pd.DataFrame):
-        examples = pd.DataFrame({'examples': examples})
-        show_columns = ['examples']
+class Annotator:
+    def __init__(self, examples, options=None, shuffle=False, include_skip=True, max_options_dropdown=10, 
+                        show_columns=None, annotation_column_name='annotation', display_fn=display):
 
-    if shuffle:
-        examples = examples.sample(frac=1.0).reset_index(drop=True)
+        self.options = options
+        self.shuffle = shuffle
+        self.include_skip = include_skip
+        self.max_options_dropdown = max_options_dropdown
+        self.show_columns = show_columns
+        self.annotation_column_name = annotation_column_name
+        self.display_fn = display
+        self.current_index = -1
+        self.current_train_score = 0.0
+        self.current_test_score = 0.0
 
-    examples[annotation_column_name] = None
-    current_index = -1
+        examples = examples.copy()
 
-    def set_label_text():
-        nonlocal count_label
-        count_label.value = '{} examples annotated, {} examples left'.format(
-            len(examples) - examples[annotation_column_name].isnull().sum(), len(examples) - current_index
-        )
+        if not isinstance(examples, pd.DataFrame):
+            self.examples = pd.DataFrame({'examples': examples})
+            self.show_columns = ['examples']
 
-    def show_next():
-        nonlocal current_index
-        current_index += 1
-        set_label_text()
-        if current_index >= len(examples):
-            for btn in buttons:
+        if shuffle:
+            examples = examples.sample(frac=1.0).reset_index(drop=True)
+
+        if annotation_column_name not in examples.columns:
+            examples[annotation_column_name] = None
+        self.examples = examples     
+
+        self.pipeline = None
+
+
+        if type(self.options) == list:
+            task_type = 'classification'
+        elif type(self.options) == tuple and len(options) in [2, 3]:
+            task_type = 'regression'
+        elif self.options is None:
+            task_type = 'captioning'
+        else:
+            raise Exception('Invalid options')
+        self.task_type = task_type
+        
+    def add_pipeline(self, pipeline, fit_every_n_sample=10, fit_minimum_samples=50, fit_test_size=0.2, fit_features='all'):
+        self.pipeline = pipeline
+        self.fit_every_n_sample = fit_every_n_sample
+        self.fit_minimum_samples = fit_minimum_samples
+        self.fit_test_size = fit_test_size
+        self.fit_features = [f for f in fit_features if f in self.examples.columns]
+
+    def init_html(self):
+        self.count_label = HTML()
+
+
+    def set_label_text(self):
+            self.count_label.value = '{} examples annotated, {} examples left <ul><li>current train score {}</li><li>current test score  {}</li></ul>'.format(
+                len(self.examples) - self.examples[self.annotation_column_name].isnull().sum(), 
+                len(self.examples) - self.current_index,
+                self.current_train_score,
+                self.current_test_score
+            )
+
+    def show_next(self):
+        self.current_index += 1
+        self.set_label_text()
+        if self.current_index >= len(self.examples):
+            for btn in self.buttons:
                 btn.disabled = True
             print('Annotation done.')
             return
-        with out:
+
+            #current index should be len(examples.dropna(subset=['label']))
+        if self.pipeline is not None \
+            and self.current_index >= self.fit_minimum_samples \
+            and (self.current_index - self.fit_minimum_samples) % self.fit_every_n_sample == 0:
+                self.fit_pipeline()
+        with self.out:
             clear_output(wait=True)
-            display_fn(examples.loc[[current_index]][show_columns])
+            self.display_fn(self.examples.loc[[self.current_index]][self.show_columns])
 
-    def add_annotation(annotation):
-        examples.at[current_index, annotation_column_name] = annotation
-        show_next()
+    def fit_pipeline(self):
+            samples = self.examples.copy().dropna(subset=[self.annotation_column_name])
+            if self.fit_features == 'all':
+                X = samples.drop(self.annotation_column_name, axis=1)
+            else:
+                X = samples[self.fit_features]
+            y = samples[[self.annotation_column_name]].values.ravel()
 
-    def skip(btn):
-        show_next()
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=self.fit_test_size)        
+            self.pipeline.fit(X_train, y_train)
+            self.current_train_score = self.pipeline.score(X_train, y_train)
+            self.current_test_score  = self.pipeline.score(X_test, y_test)
+            self.set_label_text()
 
-    count_label = HTML()
-    set_label_text()
-    display(count_label)
+    def add_annotation(self, annotation):
+        self.examples.at[self.current_index, self.annotation_column_name] = annotation
+        self.show_next()
 
-    if type(options) == list:
-        task_type = 'classification'
-    elif type(options) == tuple and len(options) in [2, 3]:
-        task_type = 'regression'
-    elif options is None:
-        task_type = 'captioning'
-    else:
-        raise Exception('Invalid options')
-
-    buttons = []
+    def skip(self, btn):
+        self.show_next()
     
-    if task_type == 'classification':
-        use_dropdown = len(options) > max_options_dropdown
 
-        if use_dropdown:
-            dd = Dropdown(options=options)
-            display(dd)
+    def annotate(self):
+        self.count_label = HTML()
+        self.set_label_text()
+        display(self.count_label)
+        self.buttons = []
+        
+        if self.task_type == 'classification':
+            use_dropdown = len(self.options) > self.max_options_dropdown
+
+            if use_dropdown:
+                dd = Dropdown(options=self.options)
+                display(dd)
+                btn = Button(description='submit')
+                def on_click(btn):
+                    self.add_annotation(dd.value)
+                btn.on_click(on_click)
+                self.buttons.append(btn)
+            
+            else:
+                for label in self.options:
+                    btn = Button(description=label)
+                    def on_click(label, btn):
+                        self.add_annotation(label)
+                    btn.on_click(functools.partial(on_click, label))
+                    self.buttons.append(btn)
+
+        elif self.task_type == 'regression':
+            target_type = type(options[0])
+            if target_type == int:
+                cls = IntSlider
+            else:
+                cls = FloatSlider
+            if len(options) == 2:
+                min_val, max_val = options
+                slider = cls(min=min_val, max=max_val)
+            else:
+                min_val, max_val, step_val = options
+                slider = cls(min=min_val, max=max_val, step=step_val)
+            display(slider)
             btn = Button(description='submit')
             def on_click(btn):
-                add_annotation(dd.value)
+                add_annotation(slider.value)
             btn.on_click(on_click)
             buttons.append(btn)
-        
+
         else:
-            for label in options:
-                btn = Button(description=label)
-                def on_click(label, btn):
-                    add_annotation(label)
-                btn.on_click(functools.partial(on_click, label))
-                buttons.append(btn)
+            ta = Textarea()
+            display(ta)
+            btn = Button(description='submit')
+            def on_click(btn):
+                self.add_annotation(ta.value)
+            btn.on_click(on_click)
+            self.buttons.append(btn)
 
-    elif task_type == 'regression':
-        target_type = type(options[0])
-        if target_type == int:
-            cls = IntSlider
-        else:
-            cls = FloatSlider
-        if len(options) == 2:
-            min_val, max_val = options
-            slider = cls(min=min_val, max=max_val)
-        else:
-            min_val, max_val, step_val = options
-            slider = cls(min=min_val, max=max_val, step=step_val)
-        display(slider)
-        btn = Button(description='submit')
-        def on_click(btn):
-            add_annotation(slider.value)
-        btn.on_click(on_click)
-        buttons.append(btn)
+        if self.include_skip:
+            btn = Button(description='skip', button_style='info')
+            btn.on_click(self.skip)
+            self.buttons.append(btn)
 
-    else:
-        ta = Textarea()
-        display(ta)
-        btn = Button(description='submit')
-        def on_click(btn):
-            add_annotation(ta.value)
-        btn.on_click(on_click)
-        buttons.append(btn)
+        self.box = HBox(self.buttons)
+        display(self.box)
 
-    if include_skip:
-        btn = Button(description='skip', button_style='info')
-        btn.on_click(skip)
-        buttons.append(btn)
+        self.out = Output()
+        display(self.out)
 
-    box = HBox(buttons)
-    display(box)
+        self.show_next()
 
-    out = Output()
-    display(out)
-
-    show_next()
-
-    return examples
+    def get_annotated_examples(self):
+        return self.examples.dropna(subset=[self.annotation_column_name])
